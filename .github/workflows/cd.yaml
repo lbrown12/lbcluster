@@ -33,8 +33,7 @@ dockerBuild:
           context: ./
           push: true
           tags: ${{ secrets.AZURE_CONTAINER_REGISTRY }}/${{ env.AZURE_CONTAINER_REPOSITORY }}:${{ github.sha }}
-
-  kubeDeploy:
+kubeDeploy:
       name: kubernetesDeployment
       runs-on: ubuntu-latest
       needs: [dockerBuild]
