@@ -35,24 +35,24 @@ dockerBuild:
           tags: ${{ secrets.AZURE_CONTAINER_REGISTRY }}/${{ env.AZURE_CONTAINER_REPOSITORY }}:${{ github.sha }}
 
   kubeDeploy:
-    name: kubernetesDeployment
-    runs-on: ubuntu-latest
-    needs: [dockerBuild]
-    steps:
-      - name: Checkout Manifest files
-        uses: actions/checkout@v3
-      - name: Set the Kubernetes context
-        uses: azure/k8s-set-context@v2
-        with:
-          method: service-account
-          k8s-url: ${{ secrets.KUBERNETES_URL }}
-          k8s-secret: ${{ secrets.KUBERNETES_SECRET }} 
-      - name: Deploy to the Kubernetes cluster
-        uses: azure/k8s-deploy@v1
-        with:
-          namespace: default
-          manifests: |
-            sample-deployment.yaml
-            test-svc.yaml
-          images: |
-            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/${{ env.AZURE_CONTAINER_REPOSITORY }}:${{ github.sha }}
+      name: kubernetesDeployment
+      runs-on: ubuntu-latest
+      needs: [dockerBuild]
+      steps:
+        - name: Checkout Manifest files
+          uses: actions/checkout@v3
+        - name: Set the Kubernetes context
+          uses: azure/k8s-set-context@v2
+          with:
+            method: service-account
+            k8s-url: ${{ secrets.KUBERNETES_URL }}
+            k8s-secret: ${{ secrets.KUBERNETES_SECRET }} 
+        - name: Deploy to the Kubernetes cluster
+          uses: azure/k8s-deploy@v1
+          with:
+            namespace: default
+            manifests: |
+              sample-deployment.yaml
+              test-svc.yaml
+            images: |
+              ${{ secrets.AZURE_CONTAINER_REGISTRY }}/${{ env.AZURE_CONTAINER_REPOSITORY }}:${{ github.sha }}
