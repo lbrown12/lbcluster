@@ -1,13 +1,11 @@
 name: cicd
 
-
 on:
   workflow_dispatch:
 
 env:
   AZURE_CONTAINER_REPOSITORY: 'lbcluster'
   AZURE_CONTAINER_REGISTRY: 'lbkubernetestestacr.azurecr.io'
-
 
 dockerBuild:
     runs-on: ubuntu-latest
