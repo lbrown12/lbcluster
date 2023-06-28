@@ -1,0 +1,267 @@
+trigger: none
+
+parameters:
+  - name: ENGAGEMENTID
+    type: string
+    displayName: Please enter the engagement ID. This will be passed in from sharepoint
+  # - name: ENGAGEMENTNAME
+  #   type: string
+  #   displayName: Please enter the engagement name. This will be passed in from sharepoint
+  - name: ENVIRONMENT
+    type: string
+    displayName: Please enter the environment. Select from 'dev', 'uat' or 'prod'
+    default: dev
+    values:
+    - dev
+    - uat_devtenant
+    - uat
+    - prod
+  - name: SQLSERVERNAME
+    type: string
+  - name: SQLPOOLNAME
+    type: string
+  - name: STORAGEACCOUNTNAME
+    type: string
+  - name: STATUS
+    type: string
+    displayName: Please select the status of the engagement
+    values:
+    - hold
+    - delivered
+    - closed
+    - archived
+    - deleted
+    - draft
+    - live
+
+variables:
+  - ${{ if eq( parameters['environment'], 'dev') }}:
+    - group: kip_dev_infra_deployment
+  - ${{ if eq( parameters['environment'], 'uat_devtenant') }}:
+    - group: kip_uat_infra_deployment_devtenant
+  - ${{ if eq( parameters['environment'], 'uat') }}:
+    - group: kip_uat_infra_deployment
+  - ${{ if eq( parameters['environment'], 'prod') }}:
+    - group: kip_prod_infra_deployment
+
+pool:
+  name: '$(self_hosted_agent_pool)'
+
+stages:
+  - stage:
+    jobs:
+      - job: apply_acl_permission
+        steps:
+          - task: AzurePowerShell@5
+            inputs:
+              azureSubscription: '$(service_principal)'
+              ScriptType: 'InlineScript'
+              Inline: |
+                $elId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-EL').Id
+                $amId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-AM').Id
+                $tmId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-TM').Id
+                $pbiId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-PBI').Id
+                $devopsId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-DEVOPS').Id
+                
+                if ($elId -eq $null -or $amId -eq $null -or $tmId -eq $null -or $pbiId -eq $null -or $devopsId -eq $null) {
+                    throw "AD Groups for the engagement Id: ${{ parameters.ENGAGEMENTID }} was not created"
+                }
+              FailOnStandardError: true
+              azurePowerShellVersion: 'LatestVersion'
+          - task: AzurePowerShell@5
+            inputs:
+              azureSubscription: '$(service_principal)'
+              ScriptType: 'InlineScript'
+              Inline: |
+                  $status = "${{ parameters.STATUS }}"
+                  $Context = New-AzStorageContext -StorageAccountName ${{ parameters.STORAGEACCOUNTNAME }} -UseConnectedAccount
+                  $filesystemName = "ei-${{lower(parameters.ENGAGEMENTID)}}-dl"              
+                  $elId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-EL').Id
+                  $amId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-AM').Id
+                  $tmId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-TM').Id
+                  $devopsId = (Get-AzADGroup -DisplayName 'EI-${{ parameters.ENGAGEMENTID }}-AD-DEVOPS').Id
+                  $acl = (Get-AzDataLakeGen2Item -FileSystem $filesystemName -Context $Context).ACL
+                  if ($status -eq "closed"){
+                    $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $tmId -Permission r-x -InputObject $acl -DefaultScope
+                    Update-AzDataLakeGen2AclRecursive -Context $Context -FileSystem $filesystemName -Acl $acl
+                    $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $tmId -Permission r-x -InputObject $acl
+                    Update-AzDataLakeGen2AclRecursive -Context $Context -FileSystem $filesystemName -Acl $acl
+                    $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $devopsId -Permission --- -InputObject $acl -DefaultScope
+                    Update-AzDataLakeGen2AclRecursive -Context $Context -FileSystem $filesystemName -Acl $acl
+                    $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $devopsId -Permission --- -InputObject $acl
+                    Update-AzDataLakeGen2AclRecursive -Context $Context -FileSystem $filesystemName -Acl $acl
+                  }else {
+                    Write-Host "No Change in ACL permission for the status: $status"
+                    # $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $tmId -Permission rwx -InputObject $acl -DefaultScope
+                    # $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $amId -Permission rwx -InputObject $acl -DefaultScope
+                    # $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $elId -Permission rwx -InputObject $acl -DefaultScope
+                    # $dirname ="raw client data/"
+                    # $acl = (Get-AzDataLakeGen2Item -FileSystem $filesystemName -Context $Context).ACL
+                    # $acl = Set-AzDataLakeGen2ItemAclObject -AccessControlType group -EntityId $tmId -Permission rw- -InputObject $acl -DefaultScope
+                    # Update-AzDataLakeGen2Item -Context $Context -FileSystem $filesystemName -Acl $acl
+                  }       
+              azurePowerShellVersion: 'LatestVersion' 
+          
+            # inputs:
+            #   pat: 'nwq6dqsr6xigm5jssahtxqpqztc7vhavqt2h6j5uws4yjdrv6oia'
+            #   project: '65fc9008-4874-4568-a7ed-ba6af92c31da'
+            #   vgname: 'kip-db-user-grp'
+            #   orgname: 'KPMG-UK'
+            #   op: 'Update'
+            #   varops: |
+            #     = engagement_id => ${{ parameters.ENGAGEMENTID }}
+            #     = environment => $(environment)
+            #     = servername => $(servername)
+            #     = client_id => $(client_id)
+            #     = client_secret => $(client_secret)
+            #     = subscription_id => $(subscription_id)
+            #     = tenant_id => $(tenant_id)
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: |
+                $servername = "${{ parameters.SQLSERVERNAME }}".replace('.database.windows.net','')
+                write-output $servername
+                $status = "${{ parameters.STATUS }}"
+                if ($status -eq "closed") { 
+                  $resourceAppIdURI = 'https://database.windows.net/'
+                  $database = "EI-${{ parameters.ENGAGEMENTID }}-DB"
+                  $dbRole ="db_datawriter","db_ddladmin"
+                  $aduser = "EI-${{ parameters.ENGAGEMENTID }}-AD-TM"
+                  $ServicePrincipalKey = ConvertTo-SecureString -String "$(client_secret)" -AsPlainText -Force
+                  $AzureADCred = New-Object System.Management.Automation.PSCredential("$(client_id)", $ServicePrincipalKey)
+                  Connect-AzAccount -ServicePrincipal -Credential $AzureADCred -TenantId $(tenant_id) -Subscription $(subscription_id)
+                  $context = Get-AzContext
+                  $context.Account.ExtendedProperties.Add("ServicePrincipalSecret", "$(client_secret)")
+                  $aadToken = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id.ToString(), $null, [Microsoft.Azure.Commands.Common.Authentication.ShowDialog]::Never, $null, $resourceAppIdURI).AccessToken
+                  Write-Host "$aadToken"
+                  Write-Host "Create SQL connectionstring"
+                  $conn = New-Object System.Data.SqlClient.SQLConnection 
+                  $conn.ConnectionString = "Data Source=$servername.database.windows.net;Initial Catalog=$database;Connect Timeout=30"
+                  $conn.AccessToken = $aadToken.ToString()
+                  try {
+                    $conn.Open()
+                    foreach ($role in $dbRole) {
+                      $ddlstmt2 = "ALTER ROLE $role DROP MEMBER [$aduser]"
+                      $command1 = New-Object -TypeName System.Data.SqlClient.SqlCommand($ddlstmt2,$conn)
+                      $command1.ExecuteNonQuery() | Out-Null
+                    }
+                    $conn.Close()
+                  }
+                  catch [Exception]{
+                    $conn.Close()
+                    $errorMessage = $_.Exception.GetType().FullName, $_.Exception.Message
+                    $errorMessage
+                    $ddlstmt3 = "SELECT DP1.name AS DatabaseRoleName, isnull (DP2.name, 'No members') 
+                                  AS DatabaseUserName FROM sys.database_role_members AS DRM
+                                  RIGHT OUTER JOIN sys.database_principals AS DP1
+                                  ON DRM.role_principal_id = DP1.principal_id
+                                  LEFT OUTER JOIN sys.database_principals AS DP2
+                                  ON DRM.member_principal_id = DP2.principal_id
+                                  WHERE DP1.type = 'R'
+                                  ORDER BY DP1.name;"
+                    $command2 = New-Object -TypeName System.Data.SqlClient.SqlCommand($ddlstmt3,$conn)
+                    $conn.Open()
+                    $command2.ExecuteNonQuery() | Out-Null
+                    $adapter = New-Object System.Data.sqlclient.sqlDataAdapter $command2
+                    $dataset = New-Object System.Data.DataSet
+                    write-output $adapter.Fill($dataSet) | Out-Null
+                    $conn.Close()
+                    $data = $dataSet.Tables[0]
+                    $existingRole = [System.Collections.Generic.List[string]]::new()
+                    foreach($row in $data) { #Loop to get the active roles of the user
+                        if ($adUser -eq $row['DatabaseUserName']) {
+                            $existingRole.Add($row['DatabaseRoleName'])
+                        }  
+                    }
+                    foreach ($role In $dbRole ) { #loop to get the roles from the config file
+                    if ($existingRole -contains $role){
+                        $ddlstmt2 = "ALTER ROLE $role DROP MEMBER [$aduser]"
+                        $command1 = New-Object -TypeName System.Data.SqlClient.SqlCommand($ddlstmt2,$conn)
+                        $conn.Open()
+                        $command1.ExecuteNonQuery() | Out-Null
+                        $conn.Close()
+                        Write-Host "role $role removed for user $adUser"
+                    }else {
+                        Write-Host "$adUser dont have the role $role"
+                    }
+                    }
+                  }
+                }else {
+                     Write-Host "No Change in DB permission for the status: $status"
+                }
+
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: |
+                $servername = "${{ parameters.SQLSERVERNAME }}".replace('.database.windows.net','')
+                write-output $servername
+                $status = "${{ parameters.STATUS }}"
+                if ($status -eq "closed") { 
+                  $resourceAppIdURI = 'https://database.windows.net/'
+                  $database = "EI-${{ parameters.ENGAGEMENTID }}-DB"
+                  $dbRole ="db_datawriter","db_ddladmin"
+                  $aduser = "EI-${{ parameters.ENGAGEMENTID }}-AD-PBI"
+                  $ServicePrincipalKey = ConvertTo-SecureString -String "$(client_secret)" -AsPlainText -Force
+                  $AzureADCred = New-Object System.Management.Automation.PSCredential("$(client_id)", $ServicePrincipalKey)
+                  Connect-AzAccount -ServicePrincipal -Credential $AzureADCred -TenantId $(tenant_id) -Subscription $(subscription_id)
+                  $context = Get-AzContext
+                  $context.Account.ExtendedProperties.Add("ServicePrincipalSecret", "$(client_secret)")
+                  $aadToken = [Microsoft.Azure.Commands.Common.Authentication.AzureSession]::Instance.AuthenticationFactory.Authenticate($context.Account, $context.Environment, $context.Tenant.Id.ToString(), $null, [Microsoft.Azure.Commands.Common.Authentication.ShowDialog]::Never, $null, $resourceAppIdURI).AccessToken
+                  Write-Host "$aadToken"
+                  Write-Host "Create SQL connectionstring"
+                  $conn = New-Object System.Data.SqlClient.SQLConnection 
+                  $conn.ConnectionString = "Data Source=$servername.database.windows.net;Initial Catalog=$database;Connect Timeout=30"
+                  $conn.AccessToken = $aadToken.ToString()
+                  try {
+                    $conn.Open()
+                    foreach ($role in $dbRole) {
+                      $ddlstmt2 = "ALTER ROLE $role DROP MEMBER [$aduser]"
+                      $command1 = New-Object -TypeName System.Data.SqlClient.SqlCommand($ddlstmt2,$conn)
+                      $command1.ExecuteNonQuery() | Out-Null
+                    }
+                    $conn.Close()
+                  }
+                  catch [Exception]{
+                    $conn.Close()
+                    $errorMessage = $_.Exception.GetType().FullName, $_.Exception.Message
+                    $errorMessage
+                    $ddlstmt3 = "SELECT DP1.name AS DatabaseRoleName, isnull (DP2.name, 'No members') 
+                                  AS DatabaseUserName FROM sys.database_role_members AS DRM
+                                  RIGHT OUTER JOIN sys.database_principals AS DP1
+                                  ON DRM.role_principal_id = DP1.principal_id
+                                  LEFT OUTER JOIN sys.database_principals AS DP2
+                                  ON DRM.member_principal_id = DP2.principal_id
+                                  WHERE DP1.type = 'R'
+                                  ORDER BY DP1.name;"
+                    $command2 = New-Object -TypeName System.Data.SqlClient.SqlCommand($ddlstmt3,$conn)
+                    $conn.Open()
+                    $command2.ExecuteNonQuery() | Out-Null
+                    $adapter = New-Object System.Data.sqlclient.sqlDataAdapter $command2
+                    $dataset = New-Object System.Data.DataSet
+                    write-output $adapter.Fill($dataSet) | Out-Null
+                    $conn.Close()
+                    $data = $dataSet.Tables[0]
+                    $existingRole = [System.Collections.Generic.List[string]]::new()
+                    foreach($row in $data) { #Loop to get the active roles of the user
+                        if ($adUser -eq $row['DatabaseUserName']) {
+                            $existingRole.Add($row['DatabaseRoleName'])
+                        }  
+                    }
+                    foreach ($role In $dbRole ) { #loop to get the roles from the config file
+                    if ($existingRole -contains $role){
+                        $ddlstmt2 = "ALTER ROLE $role DROP MEMBER [$aduser]"
+                        $command1 = New-Object -TypeName System.Data.SqlClient.SqlCommand($ddlstmt2,$conn)
+                        $conn.Open()
+                        $command1.ExecuteNonQuery() | Out-Null
+                        $conn.Close()
+                        Write-Host "role $role removed for user $adUser"
+                    }else {
+                        Write-Host "$adUser dont have the role $role"
+                    }
+                    }
+                  }
+                }else {
+                     Write-Host "No Change in DB permission for the status: $status"
+                }
